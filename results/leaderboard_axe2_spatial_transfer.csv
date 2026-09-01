@@ -1,0 +1,5 @@
+Type_Capteur,Site_Test_Inédit,Modèle,R²,RMSE (µg/m³),MAE (µg/m³),N_Obs_Test
+EXT,SITE 10,Random Forest Régional (Transféré),0.877,4.33,3.4,141
+EXT,SITE 8,Random Forest Régional (Transféré),0.336,16.68,9.8,276
+EXT,SITE 9,Random Forest Régional (Transféré),0.682,8.72,6.85,145
+INT,SITE 10,Random Forest Régional (Transféré),0.829,18.42,9.6,141

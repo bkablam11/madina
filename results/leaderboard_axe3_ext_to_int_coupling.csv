@@ -1,0 +1,7 @@
+Site,Ratio_Moyen_Infiltration (INT/EXT),R² (Prédiction INT via EXT),RMSE (µg/m³),MAE (µg/m³),N_Test
+SITE 1,1.07,-0.133,37.69,24.04,19
+SITE 10,1.36,-0.064,88.23,45.11,15
+SITE 2,1.26,0.386,8.63,7.77,22
+SITE 3,1.33,-0.612,5.62,4.97,22
+SITE 4,1.29,0.222,4.24,3.2,19
+SITE 5,1.09,0.606,2.65,2.24,10

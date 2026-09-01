@@ -1,0 +1,58 @@
+# Fichiers générés par LaTeX / TeX
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.pdfsync
+*.synctex
+*.synctex.gz
+*.toc
+*.run.xml
+*.xdv
+*.glg
+*.glo
+*.gls
+*.ist
+*.acn
+*.acr
+*.alg
+*.lof
+*.lot
+*.idx
+*.ilg
+*.ind
+*.nav
+*.snm
+*.vrb
+*.gz
+*.ps
+*.dvi
+*.bak
+*.tmp
+*.swp
+*~
+
+# Fichiers de compilation local
+.docx
+.html
+# Fichiers système / éditeur
+.DS_Store
+Thumbs.db
+.desktop.ini
+.idea/
+.vscode/
+*.code-workspace
+
+# Bibliothèques ou dépendances locales si besoin
+# /build/
+# /dist/
+.venv/
+.Rproj.user
+dataenv/
+.RData
+.Rhistory
+data/
