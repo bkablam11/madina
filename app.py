@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Plateforme Décisionnelle & Épidémiologique Qualité de l'Air (PM10 / PM2.5 -
-
-INT / EXT) 100% basée sur les données réelles consolidées.
+"""
+Plateforme Décisionnelle, Épidémiologique & Qualité de l'Air (PM10 / PM2.5 - INT / EXT)
+Cadre Scientifique Multi-Sites (Côte d'Ivoire) - Données Réelles Consolidées
 """
 
 import os
+import re
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -14,7 +15,9 @@ from plotly.subplots import make_subplots
 from scipy import stats
 import streamlit as st
 
-# Configuration de l'affichage
+# ==============================================================================
+# CONFIGURATION DE LA PAGE STREAMLIT
+# ==============================================================================
 st.set_page_config(
     page_title="Air & Santé - Décision Multi-Sites",
     page_icon="🫁",
@@ -31,6 +34,10 @@ st.markdown(
         padding: 14px;
         border-left: 4px solid #38bdf8;
     }
+    .main-title {
+        color: #1e3a8a;
+        font-weight: 700;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -43,6 +50,7 @@ PATHOLOGIES = [
     "acute_respiratory_infections",
     "acute_bronchitis",
 ]
+
 PATHOLOGY_LABELS = {
     "Sore_throat": "Mal de gorge",
     "asthma": "Asthme",
@@ -57,36 +65,49 @@ PATHOLOGY_LABELS = {
 # ==============================================================================
 @st.cache_data
 def load_master_dataset():
-    master_file = "./processed_data/master_air_health_dataset.csv"
-    if not os.path.exists(master_file):
-        st.error(
-            f"Fichier '{master_file}' introuvable. Veuillez exécuter `python process_and_analyze_health_air.py` d'abord."
-        )
+    """Charge le jeu de données maître avec fallback si nécessaire."""
+    primary_file = "./processed_data/master_air_health_dataset.csv"
+    fallback_file = "./processed_data/dataset_master_daily_all_sites.csv"
+
+    if os.path.exists(primary_file):
+        df = pd.read_csv(primary_file)
+    elif os.path.exists(fallback_file):
+        df = pd.read_csv(fallback_file)
+    else:
+        st.error("Aucun fichier de données consolidé trouvé dans `./processed_data/`.")
         return pd.DataFrame()
 
-    df = pd.read_csv(master_file)
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"])
-        df["Mois_Annee"] = df["date"].dt.strftime("%b %Y")
-        df = df.sort_values(by="date").reset_index(drop=True)
+    date_col = "date" if "date" in df.columns else df.columns[0]
+    df["date"] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=["date"])
+    df["Mois_Annee"] = df["date"].dt.strftime("%b %Y")
+    df = df.sort_values(by="date").reset_index(drop=True)
     return df
 
 
 df_master = load_master_dataset()
 
+
 # ==============================================================================
-# 2. BARRE LATÉRALE ET FILTRES DYNAMIQUES
+# 2. BARRE LATÉRALE ET FILTRES DYNAMIQUES (SITES 1 À 10 + MASTER)
 # ==============================================================================
 st.sidebar.markdown("## ⚙️ Contrôle du Réseau")
 st.sidebar.info("📅 **Données :** Série Mensuelle Réelle")
 
-if not df_master.empty:
-    sites_disponibles = sorted(df_master["site"].unique())
-    selected_site = st.sidebar.selectbox(
-        "📍 Station / Quartier :", ["Tous les Sites"] + sites_disponibles
-    )
+def natural_sort_key(s):
+    """Tri naturel pour classer SITE 1, SITE 2, ... SITE 10 dans l'ordre numérique."""
+    return [
+        int(text) if text.isdigit() else text.lower()
+        for text in re.split(r"(\d+)", str(s))
+    ]
+
+if not df_master.empty and "site" in df_master.columns:
+    sites_uniques = [s for s in df_master["site"].dropna().unique()]
+    sites_disponibles = sorted(sites_uniques, key=natural_sort_key)
+    options_menu = ["Tous les Sites (Master)"] + sites_disponibles
+    selected_site = st.sidebar.selectbox("📍 Station / Quartier :", options_menu)
 else:
-    selected_site = "Tous les Sites"
+    selected_site = "Tous les Sites (Master)"
 
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
@@ -101,71 +122,78 @@ menu = st.sidebar.radio(
 )
 
 # Application stricte du filtre
-if selected_site != "Tous les Sites" and not df_master.empty:
+is_master = selected_site == "Tous les Sites (Master)"
+if not is_master and not df_master.empty:
     df_current = df_master[df_master["site"] == selected_site].copy()
 else:
     df_current = df_master.copy()
 
-# ==============================================================================
-# FONCTIONS UTILITAIRES DE CALCUL EN TEMPS RÉEL (SANS FICHIERS STATIQUES)
-# ==============================================================================
 
-
+# ==============================================================================
+# FONCTIONS UTILITAIRES DE CALCUL EN TEMPS RÉEL
+# ==============================================================================
 def calculate_dynamic_stats(df):
-    """Calcule les statistiques descriptives à la volée sur le jeu filtré."""
+    """Calcule les statistiques descriptives réelles à la volée."""
     records = []
     for loc in ["EXT", "INT"]:
         sub = df[df["location"] == loc]
         if sub.empty:
             continue
         row = {
-            "Point de mesure": "Extérieur (EXT)"
-            if loc == "EXT"
-            else "Intérieur (INT)",
+            "Point de mesure": "Extérieur (EXT)" if loc == "EXT" else "Intérieur (INT)",
             "Observations": len(sub),
-            "PM10 Moyen (µg/m³)": round(sub["PM10"].mean(), 1)
-            if "PM10" in sub
-            else "-",
+            "PM10 Moyen (µg/m³)": round(sub["PM10"].mean(), 1) if "PM10" in sub else "-",
             "PM10 Min": round(sub["PM10"].min(), 1) if "PM10" in sub else "-",
             "PM10 Max": round(sub["PM10"].max(), 1) if "PM10" in sub else "-",
-            "PM2.5 Moyen (µg/m³)": round(sub["PM2.5"].mean(), 1)
-            if "PM2.5" in sub
-            else "-",
-            "PM2.5 Max": round(sub["PM2.5"].max(), 1)
-            if "PM2.5" in sub
-            else "-",
-            "Temp (°C)": round(sub["temp_c"].mean(), 1)
-            if "temp_c" in sub
-            else "-",
-            "Humidité (%)": round(sub["humidity"].mean(), 1)
-            if "humidity" in sub
-            else "-",
+            "PM2.5 Moyen (µg/m³)": round(sub["PM2.5"].mean(), 1) if "PM2.5" in sub else "-",
+            "PM2.5 Max": round(sub["PM2.5"].max(), 1) if "PM2.5" in sub else "-",
+            "Temp (°C)": round(sub["temp_c"].mean(), 1) if "temp_c" in sub else "-",
+            "Humidité (%)": round(sub["humidity"].mean(), 1) if "humidity" in sub else "-",
         }
         for p in PATHOLOGIES:
             if p in sub:
-                row[f"{PATHOLOGY_LABELS.get(p, p)} (Moy)"] = round(
-                    sub[p].mean(), 1
-                )
+                row[f"{PATHOLOGY_LABELS.get(p, p)} (Moy)"] = round(sub[p].mean(), 1)
         records.append(row)
     return pd.DataFrame(records)
 
 
-def compute_paired_ext_int(df):
-    """Couple les mesures EXT et INT sur les dates communes pour le ratio I/O."""
-    ext = df[df["location"] == "EXT"][["date", "Mois_Annee", "PM10", "PM2.5"]]
-    interior = df[df["location"] == "INT"][
-        ["date", "Mois_Annee", "PM10", "PM2.5"]
-    ]
-    merged = pd.merge(
-        ext, interior, on=["date", "Mois_Annee"], suffixes=("_EXT", "_INT")
-    )
+def compute_paired_ext_int(df, is_global_master=False):
+    """
+    Couple les mesures EXT et INT sur les dates communes pour le ratio I/O.
+    Gère le calcul propre site par site pour éviter les fusions croisées en mode Master.
+    """
+    merge_keys = ["site", "date", "Mois_Annee"] if "site" in df.columns else ["date", "Mois_Annee"]
+
+    cols_ext = [c for c in merge_keys + ["PM10", "PM2.5"] if c in df.columns]
+    ext = df[df["location"] == "EXT"][cols_ext]
+    interior = df[df["location"] == "INT"][cols_ext]
+
+    merged = pd.merge(ext, interior, on=merge_keys, suffixes=("_EXT", "_INT"))
+
     if not merged.empty:
-        merged["Ratio_IO_PM10"] = merged["PM10_INT"] / (
-            merged["PM10_EXT"] + 1e-4
-        )
-        merged["Delta_PM10"] = (
-            merged["PM10_EXT"] - merged["PM10_INT"]
-        )  # Positif = Bâti protecteur
+        merged["Ratio_IO_PM10"] = merged["PM10_INT"] / (merged["PM10_EXT"] + 1e-4)
+        merged["Delta_PM10"] = merged["PM10_EXT"] - merged["PM10_INT"]
+
+        # Si on est en mode Master, on fait la moyenne mensuelle propre des ratios
+        if is_global_master:
+            agg_dict = {
+                "PM10_EXT": "mean",
+                "PM10_INT": "mean",
+                "Ratio_IO_PM10": "mean",
+                "Delta_PM10": "mean",
+                "date": "min",
+            }
+            if "PM2.5_EXT" in merged.columns and "PM2.5_INT" in merged.columns:
+                agg_dict["PM2.5_EXT"] = "mean"
+                agg_dict["PM2.5_INT"] = "mean"
+
+            merged = (
+                merged.groupby("Mois_Annee")
+                .agg(agg_dict)
+                .sort_values("date")
+                .reset_index()
+            )
+
     return merged
 
 
@@ -181,20 +209,10 @@ if menu == "📊 1. Surveillance & Diagnostic Polluants":
     if not df_current.empty:
         # Cartes métriques globales
         c1, c2, c3, c4 = st.columns(4)
-        pm10_mean = (
-            df_current["PM10"].mean() if "PM10" in df_current.columns else 0
-        )
-        pm25_mean = (
-            df_current["PM2.5"].mean() if "PM2.5" in df_current.columns else 0
-        )
-        t_mean = (
-            df_current["temp_c"].mean() if "temp_c" in df_current.columns else 0
-        )
-        h_mean = (
-            df_current["humidity"].mean()
-            if "humidity" in df_current.columns
-            else 0
-        )
+        pm10_mean = df_current["PM10"].mean() if "PM10" in df_current.columns else 0
+        pm25_mean = df_current["PM2.5"].mean() if "PM2.5" in df_current.columns else 0
+        t_mean = df_current["temp_c"].mean() if "temp_c" in df_current.columns else 0
+        h_mean = df_current["humidity"].mean() if "humidity" in df_current.columns else 0
 
         with c1:
             st.metric(
@@ -217,23 +235,42 @@ if menu == "📊 1. Surveillance & Diagnostic Polluants":
 
         st.markdown("---")
 
+        # 🎯 CORRECTION D'AGRÉGATION DU MASTER :
+        # En mode Master, on calcule la vraie moyenne inter-sites par mois pour éviter la sommation
+        if is_master:
+            agg_cols = {"PM10": "mean", "date": "min"}
+            if "PM2.5" in df_current.columns:
+                agg_cols["PM2.5"] = "mean"
+
+            df_plot = (
+                df_current.groupby(["Mois_Annee", "location"])
+                .agg(agg_cols)
+                .reset_index()
+                .sort_values("date")
+            )
+        else:
+            df_plot = df_current.sort_values("date").copy()
+
         # Graphiques temporels dynamiques avec axes auto-adaptatifs
         col_g1, col_g2 = st.columns(2)
 
-        max_pm10 = df_current["PM10"].max() * 1.15
-        max_pm25 = df_current["PM2.5"].max() * 1.15
+        max_pm10 = (df_plot["PM10"].max() * 1.15) if "PM10" in df_plot else 100
+        max_pm25 = (df_plot["PM2.5"].max() * 1.15) if "PM2.5" in df_plot else 100
 
         with col_g1:
-            st.subheader("Évolution Chronologique des PM10 (EXT vs INT)")
+            st.subheader(
+                "Évolution Chronologique des PM10 (EXT vs INT)"
+                + (" - Moyenne Master" if is_master else "")
+            )
             fig_pm10 = px.bar(
-                df_current,
+                df_plot,
                 x="Mois_Annee",
                 y="PM10",
                 color="location",
                 barmode="group",
                 color_discrete_map={"EXT": "#2563eb", "INT": "#f97316"},
                 labels={
-                    "PM10": "PM10 (µg/m³)",
+                    "PM10": "PM10 Moyen (µg/m³)" if is_master else "PM10 (µg/m³)",
                     "Mois_Annee": "Mois",
                     "location": "Capteur",
                 },
@@ -250,35 +287,42 @@ if menu == "📊 1. Surveillance & Diagnostic Polluants":
             st.plotly_chart(fig_pm10, use_container_width=True)
 
         with col_g2:
-            st.subheader("Évolution Chronologique des PM2.5 (EXT vs INT)")
-            fig_pm25 = px.bar(
-                df_current,
-                x="Mois_Annee",
-                y="PM2.5",
-                color="location",
-                barmode="group",
-                color_discrete_map={"EXT": "#0284c7", "INT": "#ea580c"},
-                labels={
-                    "PM2.5": "PM2.5 (µg/m³)",
-                    "Mois_Annee": "Mois",
-                    "location": "Capteur",
-                },
-                template="plotly_white",
+            st.subheader(
+                "Évolution Chronologique des PM2.5 (EXT vs INT)"
+                + (" - Moyenne Master" if is_master else "")
             )
-            fig_pm25.add_hline(
-                y=15,
-                line_dash="dash",
-                line_color="#dc2626",
-                annotation_text="Seuil OMS 24h (15 µg/m³)",
-            )
-            fig_pm25.update_yaxes(range=[0, max_pm25], title="PM2.5 (µg/m³)")
-            fig_pm25.update_layout(xaxis_tickangle=-45, legend=dict(y=1.1, orientation="h"))
-            st.plotly_chart(fig_pm25, use_container_width=True)
+            if "PM2.5" in df_plot.columns:
+                fig_pm25 = px.bar(
+                    df_plot,
+                    x="Mois_Annee",
+                    y="PM2.5",
+                    color="location",
+                    barmode="group",
+                    color_discrete_map={"EXT": "#0284c7", "INT": "#ea580c"},
+                    labels={
+                        "PM2.5": "PM2.5 Moyen (µg/m³)" if is_master else "PM2.5 (µg/m³)",
+                        "Mois_Annee": "Mois",
+                        "location": "Capteur",
+                    },
+                    template="plotly_white",
+                )
+                fig_pm25.add_hline(
+                    y=15,
+                    line_dash="dash",
+                    line_color="#dc2626",
+                    annotation_text="Seuil OMS 24h (15 µg/m³)",
+                )
+                fig_pm25.update_yaxes(range=[0, max_pm25], title="PM2.5 (µg/m³)")
+                fig_pm25.update_layout(xaxis_tickangle=-45, legend=dict(y=1.1, orientation="h"))
+                st.plotly_chart(fig_pm25, use_container_width=True)
+            else:
+                st.info("Données PM2.5 non disponibles pour ce choix.")
 
         # Tableau de synthèse dynamique calculé en temps réel
         st.markdown(f"### 📋 Synthèse Statistique Calculée ({selected_site})")
         df_dyn_stats = calculate_dynamic_stats(df_current)
         st.dataframe(df_dyn_stats, use_container_width=True)
+
 
 # ==============================================================================
 # MODULE 2 : INFILTRATION & SALUBRITÉ BÂTIMENT (INT vs EXT)
@@ -289,7 +333,7 @@ elif menu == "🚪 2. Infiltration & Salubrité Bâtiment (INT vs EXT)":
         "Évalue la protection passive offerte par le bâti et détecte les sources internes de pollution."
     )
 
-    paired_df = compute_paired_ext_int(df_current)
+    paired_df = compute_paired_ext_int(df_current, is_global_master=is_master)
 
     if not paired_df.empty:
         c1, c2, c3 = st.columns(3)
@@ -301,20 +345,18 @@ elif menu == "🚪 2. Infiltration & Salubrité Bâtiment (INT vs EXT)":
             st.metric(
                 "Ratio I/O Moyen",
                 f"{mean_ratio:.2f}",
-                help="I/O < 1.0 = Bâtiment protecteur | I/O > 1.0 = Sources intérieures",
+                help="I/O < 1.0 = Bâtiment protecteur | I/O > 1.0 = Sources intérieures dominantes",
             )
         with c2:
             st.metric(
                 "Atténuation Moyenne du Bâti",
                 f"{mean_delta:+.1f} µg/m³",
-                delta="Air Intérieur Plus Sain"
-                if mean_delta > 0
-                else "Air Intérieur Dégradé",
+                delta="Air Intérieur Plus Sain" if mean_delta > 0 else "Air Intérieur Dégradé",
             )
         with c3:
             st.metric(
-                "Mois Critiques (I/O > 1)",
-                f"{months_indoor_worse} / {len(paired_df)} mois",
+                "Périodes Critiques (I/O > 1)",
+                f"{months_indoor_worse} / {len(paired_df)}",
             )
 
         col_b1, col_b2 = st.columns(2)
@@ -344,7 +386,6 @@ elif menu == "🚪 2. Infiltration & Salubrité Bâtiment (INT vs EXT)":
 
         with col_b2:
             st.subheader("Atténuation Nette Mensuelle (PM EXT - PM INT)")
-            # Vert si le bâtiment a protégé (Delta > 0), Rouge s'il a pollué (Delta < 0)
             colors = [
                 "#16a34a" if val > 0 else "#dc2626"
                 for val in paired_df["Delta_PM10"]
@@ -364,20 +405,15 @@ elif menu == "🚪 2. Infiltration & Salubrité Bâtiment (INT vs EXT)":
             )
             st.plotly_chart(fig_delta, use_container_width=True)
 
-        st.dataframe(
-            paired_df[
-                [
-                    "Mois_Annee",
-                    "PM10_EXT",
-                    "PM10_INT",
-                    "Ratio_IO_PM10",
-                    "Delta_PM10",
-                ]
-            ].round(2),
-            use_container_width=True,
-        )
+        display_cols = [
+            c
+            for c in ["site", "Mois_Annee", "PM10_EXT", "PM10_INT", "Ratio_IO_PM10", "Delta_PM10"]
+            if c in paired_df.columns
+        ]
+        st.dataframe(paired_df[display_cols].round(2), use_container_width=True)
     else:
         st.warning("Mesures simultanées EXT et INT insuffisantes pour ce site.")
+
 
 # ==============================================================================
 # MODULE 3 : IMPACT SANITAIRE (LES 5 PATHOLOGIES)
@@ -397,7 +433,6 @@ elif menu == "🫁 3. Impact Sanitaire (Les 5 Pathologies)":
             format_func=lambda x: PATHOLOGY_LABELS.get(x, x),
         )
 
-        # Double axe décisionnel : Pollution vs Cas de Santé
         st.subheader(
             f"Superposition Temporelle : PM10 vs Cas de {PATHOLOGY_LABELS.get(sel_patho, sel_patho)}"
         )
@@ -459,7 +494,7 @@ elif menu == "🫁 3. Impact Sanitaire (Les 5 Pathologies)":
                 df_current,
                 x="PM10",
                 y=sel_patho,
-                color="location",
+                color="location" if "location" in df_current.columns else None,
                 trendline="ols",
                 labels={
                     "PM10": "PM10 (µg/m³)",
@@ -487,9 +522,12 @@ elif menu == "🫁 3. Impact Sanitaire (Les 5 Pathologies)":
                 template="plotly_white",
             )
             st.plotly_chart(fig_mat, use_container_width=True)
+    else:
+        st.info("Colonnes sanitaires non trouvées dans le jeu de données.")
+
 
 # ==============================================================================
-# MODULE 4 : MODÉLISATION & SENSIBILITÉ DU RISQUE (SUR DONNÉES RÉELLES)
+# MODULE 4 : MODÉLISATION & SENSIBILITÉ DU RISQUE
 # ==============================================================================
 elif menu == "📈 4. Modélisation & Sensibilité Risque":
     st.title("📈 Évaluation Empirique du Risque Respiratoire")
@@ -513,9 +551,7 @@ elif menu == "📈 4. Modélisation & Sensibilité Risque":
                         "Pathologie": PATHOLOGY_LABELS.get(pat, pat),
                         "Augmentation par +10 µg/m³ PM10": f"{slope * 10:+.1f} cas",
                         "Corrélation Spearman (R)": round(r_spearman, 3),
-                        "Significatif (p < 0.05)": "Oui ✅"
-                        if p_spearman < 0.05
-                        else "Non ⚠️",
+                        "Significatif (p < 0.05)": "Oui ✅" if p_spearman < 0.05 else "Non ⚠️",
                         "Nbr Observations": len(clean),
                     }
                 )
@@ -538,6 +574,7 @@ elif menu == "📈 4. Modélisation & Sensibilité Risque":
     else:
         st.info("Données insuffisantes pour ajuster les pentes de sensibilité.")
 
+
 # ==============================================================================
 # MODULE 5 : AIDE À LA DÉCISION & ALERTES SANITAIRES
 # ==============================================================================
@@ -555,14 +592,14 @@ elif menu == "🎯 5. Aide à la Décision & Alertes":
             "PM10 Extérieur projeté (µg/m³)",
             10.0,
             250.0,
-            float(df_current["PM10"].mean())
-            if not df_current.empty
-            else 60.0,
+            float(df_current["PM10"].mean()) if not df_current.empty else 60.0,
         )
 
-        paired_df = compute_paired_ext_int(df_current)
+        paired_df = compute_paired_ext_int(df_current, is_global_master=is_master)
         ratio_site = (
-            paired_df["Ratio_IO_PM10"].mean() if not paired_df.empty else 0.85
+            paired_df["Ratio_IO_PM10"].mean()
+            if not paired_df.empty and pd.notna(paired_df["Ratio_IO_PM10"].mean())
+            else 0.85
         )
 
         pm10_in_attendu = sim_pm10 * ratio_site
@@ -595,7 +632,7 @@ elif menu == "🎯 5. Aide à la Décision & Alertes":
             go.Indicator(
                 mode="gauge+number",
                 value=sim_pm10,
-                title={"text": "Indice de Risque OMS", "font": {"size": 18}},
+                title={"text": "Indice de Risque OMS (PM10)", "font": {"size": 18}},
                 gauge={
                     "axis": {"range": [0, 200]},
                     "bar": {"color": "#1e3a8a"},
